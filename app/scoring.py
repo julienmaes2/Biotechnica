@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+
 def moonshot_score_row(row, weights):
     price_breakout = float(row.get("price_breakout", 0))
     rsi_val = row.get("rsi", np.nan)
@@ -25,6 +26,7 @@ def moonshot_score_row(row, weights):
         weights["catalyst_proximity"] * catalyst_component
     )
     return score
+
 def apply_scoring(df: pd.DataFrame, weights: dict) -> pd.DataFrame:
     df = df.copy()
     df["moonshot_score"] = df.apply(lambda r: moonshot_score_row(r, weights), axis=1)

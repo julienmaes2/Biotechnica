@@ -1,4 +1,5 @@
 import pandas as pd
+
 def load_catalysts_csv(path: str) -> pd.DataFrame:
     try:
         df = pd.read_csv(path)
@@ -10,6 +11,7 @@ def load_catalysts_csv(path: str) -> pd.DataFrame:
     df["event_date"] = pd.to_datetime(df[df.columns[cols_lower.index("event_date")]]).dt.date
     df["ticker"] = df[df.columns[cols_lower.index("ticker")]].astype(str).str.upper()
     return df
+
 def catalyst_proximity_component(events_df: pd.DataFrame, ticker: str, today=None, lookahead_days=45):
     if events_df is None or events_df.empty:
         return 0.0

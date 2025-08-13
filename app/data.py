@@ -3,10 +3,12 @@ import pandas as pd
 import requests
 
 BASE = "https://finnhub.io/api/v1"
+
 def _auth(api_key: str) -> dict:
     return {"token": api_key}
 
 def list_us_symbols(api_key: str, industry_filters=("Biotechnology","Pharmaceuticals")) -> pd.DataFrame:
+    """Return US-listed symbols. If 'finnhubIndustry' is missing, skip industry filtering safely."""
     url = f"{BASE}/stock/symbol"
     params = {"exchange": "US", **_auth(api_key)}
     r = requests.get(url, params=params, timeout=30)
@@ -14,10 +16,20 @@ def list_us_symbols(api_key: str, industry_filters=("Biotechnology","Pharmaceuti
     df = pd.DataFrame(r.json())
     if df.empty:
         return df
+
+    # Normalize columns we care about
+    keep = [c for c in ["symbol","description","finnhubIndustry","type","currency"] if c in df.columns]
+    df = df[keep].drop_duplicates()
+
+    # Filter by industry IF the column exists; otherwise return all US symbols
     if "finnhubIndustry" in df.columns:
         df = df[df["finnhubIndustry"].isin(industry_filters)].copy()
-    keep = ["symbol","description","finnhubIndustry","type","currency"]
-    return df[keep].drop_duplicates()
+
+    # Basic sanity: keep only 'Common Stock' or empty type if present
+    if "type" in df.columns:
+        df = df[(df["type"].isin(["Common Stock","","EQS"])) | df["type"].isna()]
+
+    return df.reset_index(drop=True)
 
 def get_candles(api_key: str, symbol: str, resolution: str = "D", lookback_days: int = 120) -> pd.DataFrame:
     to_ts = int(time.time())

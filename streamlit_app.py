@@ -1,5 +1,3 @@
-import os
-import time
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -17,20 +15,22 @@ with st.sidebar:
     api_key = st.text_input("Finnhub API Key", value=get_finnhub_key(), type="password")
     resolution = st.selectbox("Candle Resolution", ["D","60","30","15","5","1"], index=0)
     lookback_days = st.slider("Lookback window (days)", 60, 365, 180)
+
     st.markdown("---")
     st.subheader("Moonshot Weights")
     w_price = st.slider("Price Breakout", 0, 100, 21)
-    w_rsi = st.slider("RSI Momentum", 0, 100, 25)
-    w_macd = st.slider("MACD Signal", 0, 100, 20)
-    w_vol = st.slider("Volume Spike", 0, 100, 20)
-    w_cat = st.slider("Catalyst Proximity", 0, 100, 10)
+    w_rsi   = st.slider("RSI Momentum", 0, 100, 25)
+    w_macd  = st.slider("MACD Signal", 0, 100, 20)
+    w_vol   = st.slider("Volume Spike", 0, 100, 20)
+    w_cat   = st.slider("Catalyst Proximity", 0, 100, 10)
     weights = {
         "price_breakout": w_price/100.0,
-        "rsi_momentum": w_rsi/100.0,
-        "macd_signal": w_macd/100.0,
-        "volume_spike": w_vol/100.0,
+        "rsi_momentum":   w_rsi/100.0,
+        "macd_signal":    w_macd/100.0,
+        "volume_spike":   w_vol/100.0,
         "catalyst_proximity": w_cat/100.0
     }
+
     st.markdown("---")
     st.subheader("Catalysts (optional)")
     up = st.file_uploader("Upload catalysts CSV", type=["csv"])
@@ -45,17 +45,19 @@ with st.sidebar:
 st.caption("Tip: Add your Finnhub key in Streamlit Cloud → Secrets.")
 
 if not api_key:
-    st.info("Enter your Finnhub API key in the sidebar or set it in secrets.")
+    st.info("Enter your Finnhub API key (sidebar) or set it in secrets; then rerun.")
     st.stop()
 
 @st.cache_data(ttl=3600)
 def load_universe(api_key: str) -> pd.DataFrame:
-    df = md.list_us_symbols(api_key)
-    return df
+    return md.list_us_symbols(api_key)
 
 universe = load_universe(api_key)
-st.write(f"Universe size: {len(universe)} symbols" if len(universe) else "Universe is empty (check API limits).")
+if universe is None or universe.empty:
+    st.warning("Universe is empty. This can happen on free API tiers or rate-limits; try again later.")
+    st.stop()
 
+st.write(f"Universe size: {len(universe)} symbols")
 sample = st.number_input("Scan first N symbols", min_value=10, max_value=int(max(10, len(universe) or 10)), value=150, step=10)
 symbols = list(universe["symbol"].head(int(sample)))
 
@@ -66,22 +68,21 @@ for i, sym in enumerate(symbols, start=1):
         candles = md.get_candles(api_key, sym, resolution=resolution, lookback_days=int(lookback_days))
         if candles.empty or len(candles) < 35:
             continue
-        c = candles["c"]
-        v = candles["v"]
+        c = candles["c"]; v = candles["v"]
         sma10 = ind.sma(c, 10)
-        price_breakout = float(c.iloc[-1] > 1.05 * sma10.iloc[-1]) if not np.isnan(sma10.iloc[-1]) else 0.0
+        price_breakout = float(c.iloc[-1] > 1.05 * (sma10.iloc[-1] if not pd.isna(sma10.iloc[-1]) else c.iloc[-1]))
         rsi = ind.rsi(c, 14).iloc[-1]
         macd_line, signal_line, hist = ind.macd(c)
-        macd_hist = hist.iloc[-1]
+        macd_hist = hist.iloc[-1] if not pd.isna(hist.iloc[-1]) else 0.0
         vol_spike = ind.volume_spike(v, 30).iloc[-1] if len(v) >= 30 else 0.0
         catalyst_component = cat.catalyst_proximity_component(events_df, sym) if events_df is not None else 0.0
         rows.append({
             "symbol": sym,
             "price": float(c.iloc[-1]),
             "price_breakout": price_breakout,
-            "rsi": float(rsi) if not np.isnan(rsi) else np.nan,
-            "macd_hist": float(macd_hist) if not np.isnan(macd_hist) else 0.0,
-            "vol_spike": float(vol_spike) if not np.isnan(vol_spike) else 0.0,
+            "rsi": float(rsi) if not pd.isna(rsi) else np.nan,
+            "macd_hist": float(macd_hist),
+            "vol_spike": float(vol_spike) if not pd.isna(vol_spike) else 0.0,
             "catalyst_component": float(catalyst_component)
         })
     except Exception:
@@ -90,7 +91,7 @@ for i, sym in enumerate(symbols, start=1):
 
 df = pd.DataFrame(rows)
 if df.empty:
-    st.warning("No data returned. Try lower N or daily candles to reduce rate limits.")
+    st.warning("No data returned. Reduce N, use daily candles, or try again to avoid rate limits.")
     st.stop()
 
 scored = ms.apply_scoring(df, weights).sort_values("moonshot_score", ascending=False)
@@ -100,9 +101,9 @@ st.download_button("Download CSV", data=scored.to_csv(index=False), file_name="m
 
 st.markdown("""
 **Scoring Notes**
-- price_breakout = close > 1.05 × 10‑day SMA  
-- rsi = 14‑period RSI; >55 up‑weights, <30 light bounce potential  
-- macd_hist > 0 favors bullish momentum  
-- vol_spike = volume / 30‑day average (capped)  
-- catalyst_component = decays from 1 → 0 at 45 days out  
+- price_breakout = close > 1.05 × 10‑day SMA
+- rsi = 14‑period RSI; >55 up‑weights, <30 light bounce potential
+- macd_hist > 0 favors bullish momentum
+- vol_spike = volume / 30‑day average (capped)
+- catalyst_component = decays from 1 → 0 at 45 days out
 """)
