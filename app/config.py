@@ -9,3 +9,11 @@ def get_finnhub_key():
     except Exception:
         pass
     return os.getenv("FINNHUB_API_KEY", "")
+def get_secret(name, default=""):
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and name in st.secrets:
+            return st.secrets[name]
+    except Exception:
+        pass
+    return os.getenv(name, default)

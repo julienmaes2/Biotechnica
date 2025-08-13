@@ -1,14 +1,18 @@
-# Moonshot Biotech – Streamlit App (Finnhub + yfinance fallback)
-A Streamlit dashboard to surface potential **moonshot** moves in U.S.-listed biotech & pharma stocks.
+# Moonshot Biotech — Full Bundle
+Streamlit app with:
+- Finnhub preferred, automatic yfinance fallback
+- Beginner/Pro scanner with watchlists, favorites, news panel
+- Backtest tab with SL/TP, transaction costs, trade log, parameter sweep
 
-## Data sources
-- **Finnhub (preferred)** for complete US symbol universe & candles — uses your API key.
-- **Automatic fallback to yfinance** when Finnhub is unavailable. You can also **upload/paste** tickers.
-
-## Quick Deploy (Streamlit Cloud)
-1) Push these files to a **public GitHub repo**.
-2) Deploy at share.streamlit.io → Main file: `streamlit_app.py`.
-3) Add secret:
+## Deploy (Streamlit Cloud)
+- Main file: `streamlit_app.py`
+- Python: `.streamlit/runtime.txt` is 3.10
+- Secrets (optional):
 ```toml
-FINNHUB_API_KEY = "YOUR_KEY"
+FINNHUB_API_KEY="YOUR_KEY"
+TELEGRAM_BOT_TOKEN=""
+TELEGRAM_CHAT_ID=""
+SENDGRID_API_KEY=""
+EMAIL_FROM=""
+EMAIL_TO=""
 ```
