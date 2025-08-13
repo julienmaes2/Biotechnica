@@ -3,7 +3,6 @@ import time
 import pandas as pd
 import numpy as np
 import streamlit as st
-from datetime import datetime
 from app.config import get_finnhub_key
 from app import data as md
 from app import indicators as ind
@@ -25,9 +24,6 @@ with st.sidebar:
     w_macd = st.slider("MACD Signal", 0, 100, 20)
     w_vol = st.slider("Volume Spike", 0, 100, 20)
     w_cat = st.slider("Catalyst Proximity", 0, 100, 10)
-    total = w_price + w_rsi + w_macd + w_vol + w_cat
-    if total == 0:
-        st.warning("Total weight is 0. Adjust sliders.")
     weights = {
         "price_breakout": w_price/100.0,
         "rsi_momentum": w_rsi/100.0,
@@ -46,26 +42,24 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Failed to parse catalysts CSV: {e}")
 
-st.caption("Tip: Use Streamlit Cloud to deploy this and get a public URL.")
+st.caption("Tip: Add your Finnhub key in Streamlit Cloud → Secrets.")
 
 if not api_key:
-    st.info("Enter your Finnhub API key in the sidebar (or set it in secrets.toml).")
+    st.info("Enter your Finnhub API key in the sidebar or set it in secrets.")
     st.stop()
 
 @st.cache_data(ttl=3600)
 def load_universe(api_key: str) -> pd.DataFrame:
     df = md.list_us_symbols(api_key)
-    if df.empty:
-        st.warning("Finnhub returned an empty symbol list. Check your API plan/limits.")
     return df
 
 universe = load_universe(api_key)
-st.write(f"Universe size: {len(universe)} symbols")
+st.write(f"Universe size: {len(universe)} symbols" if len(universe) else "Universe is empty (check API limits).")
 
-sample = st.number_input("Scan first N symbols (to respect rate limits)", min_value=10, max_value=int(max(10, len(universe) or 10)), value=150, step=10)
+sample = st.number_input("Scan first N symbols", min_value=10, max_value=int(max(10, len(universe) or 10)), value=150, step=10)
 symbols = list(universe["symbol"].head(int(sample)))
 
-progress = st.progress(0, text="Fetching candles & computing indicators...")
+progress = st.progress(0, text="Fetching & computing…")
 rows = []
 for i, sym in enumerate(symbols, start=1):
     try:
@@ -90,27 +84,25 @@ for i, sym in enumerate(symbols, start=1):
             "vol_spike": float(vol_spike) if not np.isnan(vol_spike) else 0.0,
             "catalyst_component": float(catalyst_component)
         })
-    except Exception as e:
-        # soft-fail on symbols that error due to rate limits or illiquid data
+    except Exception:
         pass
     progress.progress(i / max(len(symbols), 1))
 
 df = pd.DataFrame(rows)
 if df.empty:
-    st.warning("No data returned. Try reducing resolution to 'D' and increasing lookback, or lower N to avoid rate limits.")
+    st.warning("No data returned. Try lower N or daily candles to reduce rate limits.")
     st.stop()
 
 scored = ms.apply_scoring(df, weights).sort_values("moonshot_score", ascending=False)
 st.subheader("Candidates")
 st.dataframe(scored.head(100), use_container_width=True)
-
-st.download_button("Download results as CSV", data=scored.to_csv(index=False), file_name="moonshot_candidates.csv")
+st.download_button("Download CSV", data=scored.to_csv(index=False), file_name="moonshot_candidates.csv")
 
 st.markdown("""
-**Notes**
-- *price_breakout* = close > 1.05 × 10-day SMA  
-- *rsi* = 14‑period RSI; values >55 up‑weight, <30 light bounce potential  
-- *macd_hist* > 0 favors bullish momentum  
-- *vol_spike* = today's volume / 30‑day average (capped in scoring)  
-- *catalyst_component* = 1→0 decays to 45 days out  
+**Scoring Notes**
+- price_breakout = close > 1.05 × 10‑day SMA  
+- rsi = 14‑period RSI; >55 up‑weights, <30 light bounce potential  
+- macd_hist > 0 favors bullish momentum  
+- vol_spike = volume / 30‑day average (capped)  
+- catalyst_component = decays from 1 → 0 at 45 days out  
 """)
