@@ -1,42 +1,42 @@
 import pandas as pd
 import numpy as np
 import streamlit as st
+import plotly.graph_objects as go
+from datetime import date, timedelta
 from app.config import get_finnhub_key
 from app import data as md
-from app import indicators as ind
-from app import scoring as ms
 from app import catalysts as cat
+from app import backtest as bt
 
 st.set_page_config(page_title="Moonshot Biotech", page_icon="🚀", layout="wide")
-st.title("🚀 Moonshot Biotech Dashboard")
+st.title("🚀 Moonshot Biotech Dashboard — Backtest+")
 
+# Sidebar (backtest-focused for brevity)
 with st.sidebar:
-    st.header("Data Source")
-    source = st.radio("Select data backend", ["Finnhub (preferred)", "yfinance / custom"])
+    st.header("Universe")
+    source = st.radio("Backend", ["Finnhub (preferred)", "yfinance / custom"], index=1)
     api_key = st.text_input("Finnhub API Key (optional)", value=get_finnhub_key(), type="password")
-    resolution = st.selectbox("Candle Resolution", ["D","60","30","15","5","1"], index=0)
-    lookback_days = st.slider("Lookback window (days)", 60, 365, 180)
-
-    st.markdown("---")
-    st.subheader("Universe (yfinance/custom only)")
     up_universe = st.file_uploader("Upload tickers CSV (col: symbol)", type=["csv"], key="uni")
-    pasted = st.text_area("...or paste tickers separated by comma/newline", height=100)
-    st.caption("If empty, a small built-in biotech seed list is used.")
+    pasted = st.text_area("...or paste tickers separated by comma/newline", height=70)
+    sheet_url = st.text_input("Google Sheet URL (optional)")
 
     st.markdown("---")
-    st.subheader("Moonshot Weights")
-    w_price = st.slider("Price Breakout", 0, 100, 21)
-    w_rsi   = st.slider("RSI Momentum", 0, 100, 25)
-    w_macd  = st.slider("MACD Signal", 0, 100, 20)
-    w_vol   = st.slider("Volume Spike", 0, 100, 20)
-    w_cat   = st.slider("Catalyst Proximity", 0, 100, 10)
-    weights = {
-        "price_breakout": w_price/100.0,
-        "rsi_momentum":   w_rsi/100.0,
-        "macd_signal":    w_macd/100.0,
-        "volume_spike":   w_vol/100.0,
-        "catalyst_proximity": w_cat/100.0
-    }
+    st.subheader("Backtest Window")
+    start_date = st.date_input("Start date", value=(date.today() - timedelta(days=365*2)))
+    end_date = st.date_input("End date", value=date.today())
+    rebalance = st.selectbox("Rebalance", ["Daily", "Weekly"], index=1)
+
+    st.markdown("---")
+    st.subheader("Selection")
+    top_n = st.slider("Top N per rebalance", 5, 50, 20, step=1)
+    min_score = st.slider("Min score threshold", 0.0, 1.0, 0.4, 0.05)
+    max_syms = st.slider("Max tickers (cap for speed)", 20, 300, 120, step=10)
+
+    st.markdown("---")
+    st.subheader("Risk & Costs")
+    sl_pct = st.slider("Stop-loss (%)", 0.0, 20.0, 8.0, 0.5) / 100.0
+    tp_pct = st.slider("Take-profit (%)", 0.0, 50.0, 15.0, 0.5) / 100.0
+    cost_bps = st.slider("Transaction cost (bps of turnover)", 0, 100, 10, 1)
 
     st.markdown("---")
     st.subheader("Catalysts (optional)")
@@ -49,102 +49,102 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Failed to parse catalysts CSV: {e}")
 
-st.caption("Tip: If Finnhub fails, the app will try yfinance automatically.")
-
+# Build universe
 @st.cache_data(ttl=3600)
 def load_universe_finnhub(api_key: str) -> pd.DataFrame:
     return md.list_us_symbols_finnhub(api_key)
 
 @st.cache_data(ttl=3600)
-def load_universe_yf(seed_path: str, up_df) -> pd.DataFrame:
-    return md.list_symbols_from_inputs(seed_path, up_df, pasted)
+def load_universe_yf(seed_path: str, up_df, pasted_text, sheet_url) -> pd.DataFrame:
+    return md.list_symbols_from_inputs(seed_path, up_df, pasted_text, sheet_url)
 
-def get_candles(symbol: str, api_key: str, resolution: str, lookback_days: int, prefer_finnhub: bool):
-    if prefer_finnhub and api_key:
-        try:
-            df = md.get_candles_finnhub(api_key, symbol, resolution=resolution, lookback_days=lookback_days)
-            if df is not None and not df.empty:
-                return df, "finnhub"
-        except Exception:
-            pass
-    # fallback
-    try:
-        df = md.get_candles_yf(symbol, resolution=resolution, lookback_days=lookback_days)
-        if df is not None and not df.empty:
-            return df, "yfinance"
-    except Exception:
-        pass
-    return pd.DataFrame(), "none"
-
-# Build universe
 if source == "Finnhub (preferred)" and api_key:
     universe = load_universe_finnhub(api_key)
-    used_source = "finnhub"
     if universe is None or universe.empty:
-        st.warning("Finnhub universe empty/failed — falling back to yfinance/custom.")
-        universe = load_universe_yf("data/biotech_seed.csv", pd.read_csv(up_universe) if up_universe else None)
-        used_source = "yfinance/custom"
+        st.warning("Finnhub universe empty/failed — using seed/pasted/uploaded via yfinance.")
+        universe = load_universe_yf("data/biotech_seed.csv", pd.read_csv(up_universe) if up_universe else None, pasted, sheet_url)
 else:
-    universe = load_universe_yf("data/biotech_seed.csv", pd.read_csv(up_universe) if up_universe else None)
-    used_source = "yfinance/custom"
+    universe = load_universe_yf("data/biotech_seed.csv", pd.read_csv(up_universe) if up_universe else None, pasted, sheet_url)
 
 if universe is None or universe.empty:
-    st.error("No symbols available. Upload/paste a ticker list or try again.")
+    st.error("No symbols available. Upload/paste tickers or try again later.")
     st.stop()
 
-st.write(f"Universe size: {len(universe)} symbols (source: {used_source})")
+st.write(f"Universe size for backtest: {len(universe)} symbols")
 
-sample = st.number_input("Scan first N symbols", min_value=5, max_value=int(max(5, len(universe) or 5)), value=min(150, len(universe)), step=5)
-symbols = list(universe["symbol"].head(int(sample)))
+# Run backtest
+run_bt = st.button("Run Backtest")
+if run_bt:
+    with st.spinner("Running backtest…"):
+        scores, closes, ohlc_map = bt.build_rank_table(
+            symbols=list(universe["symbol"].tolist()),
+            start=str(start_date), end=str(end_date),
+            weights=bt.PRESET_WEIGHTS["Balanced"], events_df=events_df, max_symbols=int(max_syms)
+        )
+        if scores.empty:
+            st.error("No historical data fetched. Try a different date range or smaller universe.")
+        else:
+            freq = "D" if rebalance == "Daily" else "W"
+            wts = bt.rebalance_weights(scores, top_n=int(top_n), min_score=float(min_score), freq=freq)
+            port, rets = bt.simulate_portfolio(wts, closes, ohlc_map, sl_pct=float(sl_pct), tp_pct=float(tp_pct), cost_bps=float(cost_bps))
 
-progress = st.progress(0, text="Fetching & computing…")
-rows = []
-for i, sym in enumerate(symbols, start=1):
-    df, ds = get_candles(sym, api_key, resolution, int(lookback_days), prefer_finnhub=(source.startswith("Finnhub")))
-    if df is None or df.empty or len(df) < 35:
-        progress.progress(i / max(len(symbols), 1))
-        continue
-    try:
-        c = df["c"]; v = df["v"]
-        sma10 = ind.sma(c, 10)
-        price_breakout = float(c.iloc[-1] > 1.05 * (sma10.iloc[-1] if not pd.isna(sma10.iloc[-1]) else c.iloc[-1]))
-        rsi = ind.rsi(c, 14).iloc[-1]
-        macd_line, signal_line, hist = ind.macd(c)
-        macd_hist = hist.iloc[-1] if not pd.isna(hist.iloc[-1]) else 0.0
-        vol_spike = ind.volume_spike(v, 30).iloc[-1] if len(v) >= 30 else 0.0
-        catalyst_component = cat.catalyst_proximity_component(events_df, sym) if events_df is not None else 0.0
-        rows.append({
-            "symbol": sym,
-            "price": float(c.iloc[-1]),
-            "data_source": ds,
-            "price_breakout": price_breakout,
-            "rsi": float(rsi) if not pd.isna(rsi) else np.nan,
-            "macd_hist": float(macd_hist),
-            "vol_spike": float(vol_spike) if not pd.isna(vol_spike) else 0.0,
-            "catalyst_component": float(catalyst_component)
-        })
-    except Exception:
-        pass
-    progress.progress(i / max(len(symbols), 1))
+            m = bt.metrics_from_returns(port)
+            def fmt_pct(x): return ("—" if x is None or pd.isna(x) else f"{x*100:.1f}%")
+            cols = st.columns(6)
+            with cols[0]: st.metric("Total Return", fmt_pct(m.get("Total Return")))
+            with cols[1]: st.metric("CAGR", fmt_pct(m.get("CAGR")))
+            with cols[2]: st.metric("Volatility", fmt_pct(m.get("Volatility")))
+            with cols[3]: st.metric("Sharpe (rf=0)", f"{m.get('Sharpe (rf=0)', float('nan')):.2f}" if m.get('Sharpe (rf=0)')==m.get('Sharpe (rf=0)') else "—")
+            with cols[4]: st.metric("Max Drawdown", fmt_pct(m.get("Max Drawdown")))
+            with cols[5]: st.metric("Hit Rate", fmt_pct(m.get("Hit Rate")))
 
-df = pd.DataFrame(rows)
-if df.empty:
-    st.warning("No data returned. Reduce N, use daily candles, or try again to avoid rate limits.")
-    st.stop()
+            eq = (1 + port).cumprod()
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=eq.index, y=eq.values, mode="lines", name="Equity"))
+            fig.update_layout(margin=dict(l=0,r=0,b=0,t=30), height=320)
+            st.plotly_chart(fig, use_container_width=True)
 
-scored = ms.apply_scoring(df, weights).sort_values("moonshot_score", ascending=False)
-st.subheader("Candidates")
-st.dataframe(scored.head(100), use_container_width=True)
-st.download_button("Download CSV", data=scored.to_csv(index=False), file_name="moonshot_candidates.csv")
+            # Trade log
+            tlog = bt.trade_log_from_weights(wts, rets)
+            if not tlog.empty:
+                tlog = tlog.sort_values("entry_date")
+                tlog["return_pct"] = (tlog["return"] * 100).round(2)
+                st.subheader("Trade Log (entries/exits)")
+                st.dataframe(tlog, use_container_width=True, height=300)
+                st.download_button("Download trade log", data=tlog.to_csv(index=False), file_name="trade_log.csv")
 
-st.markdown("""
-**Notes**
-- If Finnhub is selected and available, the app uses Finnhub; otherwise it automatically falls back to **yfinance**.
-- You can upload or paste tickers to define a custom universe when using yfinance.
-- Scoring:
-  - price_breakout = close > 1.05 × 10‑day SMA
-  - rsi = 14‑period RSI; >55 up‑weights, <30 light bounce potential
-  - macd_hist > 0 favors bullish momentum
-  - vol_spike = volume / 30‑day average (capped)
-  - catalyst_component = decays from 1 → 0 at 45 days out
-""")
+# Parameter sweep
+st.markdown("---")
+st.subheader("Parameter Sweep (quick scan)")
+colA, colB, colC, colD = st.columns(4)
+with colA:
+    presets = st.multiselect("Weight presets", list(bt.PRESET_WEIGHTS.keys()), default=["Balanced","Momentum-heavy","Catalyst-heavy"])
+with colB:
+    topn_list = st.multiselect("Top N list", [10,15,20,25,30], default=[15,20,30])
+with colC:
+    score_list = st.multiselect("Min score list", [0.3,0.4,0.5,0.6], default=[0.4,0.5])
+with colD:
+    freq_list = st.multiselect("Rebalance", ["Daily","Weekly"], default=["Weekly"])
+
+max_syms_sweep = st.slider("Max tickers for sweep", 20, 200, 80, step=10)
+run_sweep = st.button("Run Sweep")
+if run_sweep:
+    with st.spinner("Sweeping presets × topN × thresholds × freq…"):
+        res = bt.sweep(
+            symbols=list(universe["symbol"].tolist()),
+            start=str(start_date), end=str(end_date),
+            presets=presets, topn_list=topn_list, score_list=score_list, freq_list=freq_list,
+            max_symbols=int(max_syms_sweep)
+        )
+        if res.empty:
+            st.warning("No results. Try widening the date range or increasing max tickers.")
+        else:
+            # Pretty-format percentages
+            show = res.copy()
+            for k in ["Total Return","CAGR","Volatility","Max Drawdown","Hit Rate"]:
+                show[k] = (show[k] * 100).round(1).astype(str) + "%"
+            show["Sharpe (rf=0)"] = res["Sharpe (rf=0)"].round(2)
+            st.dataframe(show, use_container_width=True, height=380)
+            st.download_button("Download sweep results", data=res.to_csv(index=False), file_name="sweep_results.csv")
+
+st.caption("Backtests approximate SL/TP using daily high/low vs prior close (order unknown). Costs applied on turnover at rebalance. Research use only, not financial advice.")
