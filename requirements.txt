@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 requests==2.32.3
 finnhub-python==2.4.21
 plotly==5.23.0
+yfinance==0.2.40
